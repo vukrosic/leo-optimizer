@@ -1,4 +1,8 @@
 # Leo Optimizer
+
+YouTube - https://youtu.be/AphJlOhFiZ0
+
+Bilibili 中文版 - https://www.bilibili.com/video/BV1EEaLzMEwY/
  
 ## Quick start (main script)
 Run the single-run comparison:
