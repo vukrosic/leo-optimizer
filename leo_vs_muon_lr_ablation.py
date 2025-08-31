@@ -53,8 +53,7 @@ class LRAblationConfig:
     gradient_accumulation_steps: int = 4
     
     # Fixed AdamW learning rate (decoupled from main optimizer)
-    adamw_lr: float = 0.001  # Fixed at 1e-3    # D
-ata parameters
+    adamw_lr: float = 0.001  # Fixed at 1e-3    # Data parameters
     max_seq_len: int = 512
     num_documents: int = 1000
     max_tokens: int = 250000
