@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+LLM Optimizer Comparison Script
+Compares Muon vs Leo optimizers on language modeling task
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,10 +17,14 @@ from tqdm import tqdm
 import time
 from transformers import AutoTokenizer
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
 import warnings
 import os
 import pickle
+import matplotlib.pyplot as plt
+import json
+from datetime import datetime
+
 warnings.filterwarnings('ignore')
 
 def set_seed(seed: int = 42):
@@ -25,10 +35,9 @@ def set_seed(seed: int = 42):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    print(f"🌱 Set all seeds to {seed}")
 
 @dataclass
-class ModelConfig:
+class ComparisonConfig:
     # Model architecture
     d_model: int = 384
     n_heads: int = 8
@@ -39,16 +48,16 @@ class ModelConfig:
 
     # Training parameters
     gradient_accumulation_steps: int = 4
-    muon_lr: float = 0.01
+    lr: float = 0.01
 
     # Data parameters
     max_seq_len: int = 512
-    num_documents: int = 2000
-    max_tokens: int = 500000
+    num_documents: int = 1000  # Reduced for faster comparison
+    max_tokens: int = 250000   # Reduced for faster comparison
 
     # Evaluation
-    eval_every: int = 500
-    eval_steps: int = 100
+    eval_every: int = 100
+    eval_steps: int = 50
 
     # Regularization
     weight_decay: float = 0.1
@@ -63,6 +72,7 @@ class ModelConfig:
         self.d_k = self.d_model // self.n_heads
         assert self.d_model % self.n_heads == 0, "d_model must be divisible by n_heads"
 
+# Import optimizers from both files
 @torch.compile
 def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
     """Newton-Schulz iteration to compute the zeroth power / orthogonalization of G."""
@@ -109,34 +119,96 @@ class Muon(torch.optim.Optimizer):
                 g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
                 g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
                 p.add_(g.view_as(p), alpha=-group["lr"] * max(1, p.size(-2) / p.size(-1))**0.5)
-	
-def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
-    """Load and cache tokenized data to avoid reprocessing"""
+
+class Leo(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.99), weight_decay=0.01, align_const=0.2, eps=1e-8):
+        """Leo (Lion with Element-wise Orthogonalization-proxy) optimizer."""
+        if not 0.0 <= lr:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
+        if not 0.0 <= weight_decay:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+        
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay, align_const=align_const, eps=eps)
+        super(Leo, self).__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group['lr']
+            beta1, beta2 = group['betas']
+            weight_decay = group['weight_decay']
+            align_const = group['align_const']
+            eps = group['eps']
+            wd_factor = -lr * weight_decay
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state['momentum'] = torch.zeros_like(p)
+
+                momentum = state['momentum']
+                update_direction = torch.lerp(grad, momentum, beta1)
+                momentum.lerp_(grad, 1 - beta2)
+
+                if p.dim() == 2:
+                    row_norm = torch.linalg.norm(update_direction, ord=2, dim=1, keepdim=True)
+                    col_norm = torch.linalg.norm(update_direction, ord=2, dim=0, keepdim=True)
+                    
+                    update = torch.div(update_direction, row_norm.add(eps))
+                    update.addcdiv_(update_direction, col_norm.add(eps))
+                    
+                    rms = torch.sqrt(torch.mean(update.square()) + eps)
+                    scaling_factor = align_const / (rms + eps)
+                    update.mul_(scaling_factor)
+                    update_direction = update
+                else:
+                    update_direction.sign_().mul_(align_const)
+
+                if weight_decay != 0:
+                    p.add_(p, alpha=wd_factor)
+                
+                p.add_(update_direction, alpha=-lr)
+
+        return loss
+
+# Import model components (simplified versions for comparison)
+def load_and_cache_data(config: ComparisonConfig, cache_dir: str = "comparison_cache"):
+    """Load and cache tokenized data"""
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = f"{cache_dir}/tokenized_data_{config.num_documents}_{config.max_tokens}.pkl"
 
-    # Check if cached data exists
     if os.path.exists(cache_file):
         print(f"📦 Loading cached data from {cache_file}")
         with open(cache_file, 'rb') as f:
             cached_data = pickle.load(f)
-
+        
         texts = cached_data['texts']
         tokenizer = cached_data['tokenizer']
         tokens = cached_data['tokens']
         config.vocab_size = tokenizer.vocab_size
-
         print(f"✅ Loaded {len(texts)} documents, {len(tokens):,} tokens from cache")
         return texts, tokenizer, tokens
 
     print(f"🔄 Processing new data (will cache for future use)")
-
-    # Load tokenizer
+    
     tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M", token=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load dataset
     dataset = load_dataset("HuggingFaceTB/smollm-corpus", "cosmopedia-v2", split="train", streaming=True, token=False)
 
     texts = []
@@ -147,8 +219,6 @@ def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
 
     print(f"Loaded {len(texts)} documents")
 
-    # Tokenize
-    print("Tokenizing texts...")
     all_tokens = []
     for text in tqdm(texts, desc="Tokenizing"):
         tokens = tokenizer.encode(text, add_special_tokens=False)
@@ -158,7 +228,6 @@ def load_and_cache_data(config: ModelConfig, cache_dir: str = "data_cache"):
     print(f"Using {len(tokens):,} tokens")
     config.vocab_size = tokenizer.vocab_size
 
-    # Cache the processed data
     cached_data = {'texts': texts, 'tokenizer': tokenizer, 'tokens': tokens}
     with open(cache_file, 'wb') as f:
         pickle.dump(cached_data, f)
@@ -252,7 +321,7 @@ class TransformerBlock(nn.Module):
         return x
 
 class MinimalLLM(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ComparisonConfig):
         super().__init__()
         self.config = config
 
@@ -267,7 +336,6 @@ class MinimalLLM(nn.Module):
         self.norm = nn.RMSNorm(config.d_model)
         self.output_dropout = nn.Dropout(config.dropout)
 
-        # Tie weights
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head.weight = self.token_embedding.weight
 
@@ -293,7 +361,7 @@ class MinimalLLM(nn.Module):
         logits = self.lm_head(x)
         return logits
 
-def evaluate_model(model: nn.Module, val_loader: DataLoader, config: ModelConfig):
+def evaluate_model(model: nn.Module, val_loader: DataLoader, config: ComparisonConfig):
     """Evaluate model performance"""
     model.eval()
     total_loss = 0
@@ -325,9 +393,9 @@ def evaluate_model(model: nn.Module, val_loader: DataLoader, config: ModelConfig
     model.train()
     return {'val_loss': avg_loss, 'val_accuracy': accuracy, 'val_perplexity': perplexity}
 
-def setup_muon_optimizer(model: nn.Module, config: ModelConfig):
-    """Setup Muon optimizer with hybrid approach"""
-    muon_params = []
+def setup_optimizer(model: nn.Module, optimizer_name: str, config: ComparisonConfig):
+    """Setup optimizer with hybrid approach"""
+    main_params = []
     adamw_params = []
 
     for name, param in model.named_parameters():
@@ -335,24 +403,31 @@ def setup_muon_optimizer(model: nn.Module, config: ModelConfig):
             'token_embedding' not in name and 
             'norm' not in name and 
             param.requires_grad):
-            muon_params.append(param)
+            main_params.append(param)
         else:
             adamw_params.append(param)
 
-    print(f"  Muon parameters: {sum(p.numel() for p in muon_params):,}")
+    print(f"  {optimizer_name} parameters: {sum(p.numel() for p in main_params):,}")
     print(f"  AdamW parameters: {sum(p.numel() for p in adamw_params):,}")
 
-    muon_optimizer = Muon(muon_params, lr=config.muon_lr, momentum=0.95)
-    adamw_optimizer = torch.optim.AdamW(adamw_params, lr=config.muon_lr*0.1, weight_decay=config.weight_decay)
+    if optimizer_name == "Muon":
+        main_optimizer = Muon(main_params, lr=config.lr, momentum=0.95)
+    elif optimizer_name == "Leo":
+        main_optimizer = Leo(main_params, lr=config.lr, betas=(0.9, 0.99), align_const=0.3)
+    else:
+        raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
-    return [muon_optimizer, adamw_optimizer]
+    adamw_optimizer = torch.optim.AdamW(adamw_params, lr=config.lr*0.1, weight_decay=config.weight_decay)
 
-def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataLoader):
-    """Train the model with Muon optimizer"""
-    print(f"\n🚀 Training Small model with Muon optimizer")
+    return [main_optimizer, adamw_optimizer]
 
+def train_model_with_optimizer(optimizer_name: str, config: ComparisonConfig, 
+                             train_loader: DataLoader, val_loader: DataLoader) -> Tuple[List[float], List[float], Dict]:
+    """Train model with specified optimizer and return metrics"""
+    print(f"\n🚀 Training model with {optimizer_name} optimizer")
+    
     # Initialize model
-    set_seed(42)
+    set_seed(42)  # Same seed for fair comparison
     model = MinimalLLM(config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
@@ -361,7 +436,7 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
     print(f"  📊 Total parameters: {total_params:,}")
 
     # Setup optimizers
-    optimizers = setup_muon_optimizer(model, config)
+    optimizers = setup_optimizer(model, optimizer_name, config)
 
     # Learning rate schedule
     schedulers = []
@@ -379,19 +454,24 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
 
     scaler = GradScaler() if config.use_amp else None
 
+    # Training metrics
+    train_losses = []
+    val_losses = []
+    step_times = []
+
     # Training loop
     model.train()
     step = 0
     start_time = time.time()
-    best_val_loss = float('inf')
 
-    pbar = tqdm(total=config.max_steps, desc="Training")
+    pbar = tqdm(total=config.max_steps, desc=f"Training {optimizer_name}")
 
     while step < config.max_steps:
         for batch_idx, (x, y) in enumerate(train_loader):
             if step >= config.max_steps:
                 break
 
+            step_start = time.time()
             x, y = x.to(device), y.to(device)
 
             # Forward pass with gradient accumulation
@@ -412,7 +492,7 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
                 if config.use_amp:
                     for optimizer in optimizers:
                         scaler.unscale_(optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
 
                     for optimizer in optimizers:
                         scaler.step(optimizer)
@@ -421,41 +501,32 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
                         scheduler.step()
                     scaler.update()
                 else:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
                     for optimizer in optimizers:
                         optimizer.step()
                         optimizer.zero_grad()
                     for scheduler in schedulers:
                         scheduler.step()
 
-            # Logging
-            if step % 100 == 0:
-                with torch.no_grad():
-                    predictions = logits.argmax(dim=-1)
-                    accuracy = (predictions == y).float().mean().item()
-                    current_loss = loss.item() * config.gradient_accumulation_steps
-                    perplexity = math.exp(min(current_loss, 20))
+            step_time = time.time() - step_start
+            step_times.append(step_time)
 
-                pbar.set_postfix({
-                    'loss': f'{current_loss:.4f}',
-                    'acc': f'{accuracy:.3f}',
-                    'ppl': f'{perplexity:.1f}',
-                    'lr': f'{optimizers[0].param_groups[0]["lr"]:.2e}'
-                })
+            # Record training loss
+            current_loss = loss.item() * config.gradient_accumulation_steps
+            train_losses.append(current_loss)
 
             # Evaluation
-            if step % config.eval_every == 0 and step > 0:
+            if step % config.eval_every == 0:
                 eval_metrics = evaluate_model(model, val_loader, config)
-                print(f"\nStep {step}: Val Loss: {eval_metrics['val_loss']:.4f}, "
-                      f"Val Acc: {eval_metrics['val_accuracy']:.4f}, "
-                      f"Val PPL: {eval_metrics['val_perplexity']:.2f}")
-
-                if eval_metrics['val_loss'] < best_val_loss:
-                    best_val_loss = eval_metrics['val_loss']
+                val_losses.append(eval_metrics['val_loss'])
+                
+                if step % (config.eval_every * 2) == 0:  # Less frequent printing
+                    print(f"\nStep {step}: Train Loss: {current_loss:.4f}, "
+                          f"Val Loss: {eval_metrics['val_loss']:.4f}, "
+                          f"Val Acc: {eval_metrics['val_accuracy']:.4f}")
 
             step += 1
-            if step % 100 == 0:
-                pbar.update(100)
+            pbar.update(1)
 
     pbar.close()
 
@@ -467,49 +538,224 @@ def train_model(config: ModelConfig, train_loader: DataLoader, val_loader: DataL
     print(f"  📊 Final - Loss: {final_eval['val_loss']:.4f}, "
           f"Acc: {final_eval['val_accuracy']:.4f}, PPL: {final_eval['val_perplexity']:.2f}")
 
-    return model, final_eval
+    final_metrics = {
+        'final_val_loss': final_eval['val_loss'],
+        'final_val_accuracy': final_eval['val_accuracy'],
+        'final_val_perplexity': final_eval['val_perplexity'],
+        'training_time': training_time,
+        'avg_step_time': np.mean(step_times),
+        'total_params': total_params
+    }
 
-if __name__ == "__main__":
+    return train_losses, val_losses, final_metrics
+
+def plot_comparison(muon_train_losses: List[float], muon_val_losses: List[float],
+                   leo_train_losses: List[float], leo_val_losses: List[float],
+                   muon_metrics: Dict, leo_metrics: Dict, config: ComparisonConfig):
+    """Plot comparison results"""
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Training Loss
+    ax1.plot(muon_train_losses, label='Muon', alpha=0.7, color='blue')
+    ax1.plot(leo_train_losses, label='Leo', alpha=0.7, color='red')
+    ax1.set_title('Training Loss Comparison')
+    ax1.set_xlabel('Step')
+    ax1.set_ylabel('Loss')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Validation Loss
+    eval_steps = list(range(0, len(muon_val_losses) * config.eval_every, config.eval_every))
+    ax2.plot(eval_steps, muon_val_losses, label='Muon', marker='o', color='blue')
+    ax2.plot(eval_steps, leo_val_losses, label='Leo', marker='s', color='red')
+    ax2.set_title('Validation Loss Comparison')
+    ax2.set_xlabel('Step')
+    ax2.set_ylabel('Validation Loss')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Training Loss (Smoothed)
+    window = 50
+    if len(muon_train_losses) > window:
+        muon_smooth = np.convolve(muon_train_losses, np.ones(window)/window, mode='valid')
+        leo_smooth = np.convolve(leo_train_losses, np.ones(window)/window, mode='valid')
+        ax3.plot(muon_smooth, label='Muon (smoothed)', color='blue')
+        ax3.plot(leo_smooth, label='Leo (smoothed)', color='red')
+        ax3.set_title('Smoothed Training Loss')
+        ax3.set_xlabel('Step')
+        ax3.set_ylabel('Loss')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+    
+    # Performance Metrics Bar Chart
+    metrics_names = ['Final Val Loss', 'Final Val Accuracy', 'Training Time (s)', 'Avg Step Time (ms)']
+    muon_values = [
+        muon_metrics['final_val_loss'],
+        muon_metrics['final_val_accuracy'],
+        muon_metrics['training_time'],
+        muon_metrics['avg_step_time'] * 1000
+    ]
+    leo_values = [
+        leo_metrics['final_val_loss'],
+        leo_metrics['final_val_accuracy'],
+        leo_metrics['training_time'],
+        leo_metrics['avg_step_time'] * 1000
+    ]
+    
+    x = np.arange(len(metrics_names))
+    width = 0.35
+    
+    # Normalize values for better visualization
+    normalized_muon = []
+    normalized_leo = []
+    for i, (m_val, l_val) in enumerate(zip(muon_values, leo_values)):
+        if i == 1:  # Accuracy - higher is better
+            max_val = max(m_val, l_val)
+            normalized_muon.append(m_val / max_val)
+            normalized_leo.append(l_val / max_val)
+        else:  # Loss and time - lower is better
+            max_val = max(m_val, l_val)
+            normalized_muon.append(max_val / m_val if m_val > 0 else 0)
+            normalized_leo.append(max_val / l_val if l_val > 0 else 0)
+    
+    ax4.bar(x - width/2, normalized_muon, width, label='Muon', color='blue', alpha=0.7)
+    ax4.bar(x + width/2, normalized_leo, width, label='Leo', color='red', alpha=0.7)
+    ax4.set_title('Performance Metrics (Normalized)')
+    ax4.set_xlabel('Metrics')
+    ax4.set_ylabel('Normalized Score (Higher = Better)')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(metrics_names, rotation=45, ha='right')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f'llm_optimizer_comparison_{timestamp}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    print(f"📊 Comparison plot saved as {filename}")
+    
+    plt.show()
+
+def save_results(muon_metrics: Dict, leo_metrics: Dict, config: ComparisonConfig):
+    """Save comparison results to JSON"""
+    results = {
+        'timestamp': datetime.now().isoformat(),
+        'config': {
+            'd_model': config.d_model,
+            'n_layers': config.n_layers,
+            'n_heads': config.n_heads,
+            'max_steps': config.max_steps,
+            'batch_size': config.batch_size,
+            'lr': config.lr,
+            'num_documents': config.num_documents,
+            'max_tokens': config.max_tokens
+        },
+        'muon_results': muon_metrics,
+        'leo_results': leo_metrics,
+        'comparison': {
+            'val_loss_improvement': (muon_metrics['final_val_loss'] - leo_metrics['final_val_loss']) / muon_metrics['final_val_loss'] * 100,
+            'accuracy_improvement': (leo_metrics['final_val_accuracy'] - muon_metrics['final_val_accuracy']) / muon_metrics['final_val_accuracy'] * 100,
+            'speed_improvement': (muon_metrics['avg_step_time'] - leo_metrics['avg_step_time']) / muon_metrics['avg_step_time'] * 100
+        }
+    }
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f'llm_comparison_results_{timestamp}.json'
+    with open(filename, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    print(f"📄 Results saved to {filename}")
+    return results
+
+def main():
+    """Main comparison function"""
+    print("🔬 LLM Optimizer Comparison: Muon vs Leo")
+    print("=" * 60)
+    
     # Check system
-    print(f"🔍 Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"🔍 Device: {device}")
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-
-    # Set seed
-    set_seed(42)
-
-    # Create config for Small model
-    config = ModelConfig()
-    print(f"\n📋 Model Configuration:")
-    print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H, {config.d_ff}ff")
+    
+    # Create config
+    config = ComparisonConfig()
+    print(f"\n📋 Configuration:")
+    print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H")
     print(f"   Training: {config.max_steps} steps, batch size {config.batch_size}")
-    print(f"   Data: {config.max_tokens:,} tokens, seq_len {config.max_seq_len}")
-
+    print(f"   Data: {config.max_tokens:,} tokens from {config.num_documents} documents")
+    
     # Load data
     texts, tokenizer, tokens = load_and_cache_data(config)
     dataset = TextTokenDataset(tokens, config.max_seq_len)
-
+    
     # Train/val split
     val_size = len(dataset) // 10
     train_size = len(dataset) - val_size
     train_dataset, val_dataset = torch.utils.data.random_split(
         dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42)
     )
-
+    
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=2)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=2)
-
+    
     print(f"📊 Dataset: {len(train_dataset)} train, {len(val_dataset)} val samples")
+    
+    # Train with Muon
+    print("\n" + "="*60)
+    muon_train_losses, muon_val_losses, muon_metrics = train_model_with_optimizer(
+        "Muon", config, train_loader, val_loader
+    )
+    
+    # Train with Leo
+    print("\n" + "="*60)
+    leo_train_losses, leo_val_losses, leo_metrics = train_model_with_optimizer(
+        "Leo", config, train_loader, val_loader
+    )
+    
+    # Compare results
+    print("\n" + "="*60)
+    print("📊 COMPARISON RESULTS")
+    print("="*60)
+    
+    print(f"\nMuon Results:")
+    print(f"  Final Val Loss: {muon_metrics['final_val_loss']:.4f}")
+    print(f"  Final Val Accuracy: {muon_metrics['final_val_accuracy']:.4f}")
+    print(f"  Final Val Perplexity: {muon_metrics['final_val_perplexity']:.2f}")
+    print(f"  Training Time: {muon_metrics['training_time']:.1f}s")
+    print(f"  Avg Step Time: {muon_metrics['avg_step_time']*1000:.1f}ms")
+    
+    print(f"\nLeo Results:")
+    print(f"  Final Val Loss: {leo_metrics['final_val_loss']:.4f}")
+    print(f"  Final Val Accuracy: {leo_metrics['final_val_accuracy']:.4f}")
+    print(f"  Final Val Perplexity: {leo_metrics['final_val_perplexity']:.2f}")
+    print(f"  Training Time: {leo_metrics['training_time']:.1f}s")
+    print(f"  Avg Step Time: {leo_metrics['avg_step_time']*1000:.1f}ms")
+    
+    # Calculate improvements
+    val_loss_improvement = (muon_metrics['final_val_loss'] - leo_metrics['final_val_loss']) / muon_metrics['final_val_loss'] * 100
+    accuracy_improvement = (leo_metrics['final_val_accuracy'] - muon_metrics['final_val_accuracy']) / muon_metrics['final_val_accuracy'] * 100
+    speed_improvement = (muon_metrics['avg_step_time'] - leo_metrics['avg_step_time']) / muon_metrics['avg_step_time'] * 100
+    
+    print(f"\nImprovement (Leo vs Muon):")
+    print(f"  Validation Loss: {val_loss_improvement:+.2f}%")
+    print(f"  Validation Accuracy: {accuracy_improvement:+.2f}%")
+    print(f"  Step Speed: {speed_improvement:+.2f}%")
+    
+    # Plot results
+    plot_comparison(muon_train_losses, muon_val_losses, leo_train_losses, leo_val_losses, 
+                   muon_metrics, leo_metrics, config)
+    
+    # Save results
+    results = save_results(muon_metrics, leo_metrics, config)
+    
+    print(f"\n🎉 Comparison completed!")
+    print(f"Winner: {'Leo' if leo_metrics['final_val_loss'] < muon_metrics['final_val_loss'] else 'Muon'} "
+          f"(by validation loss)")
 
-    # Train model
-    start_time = time.time()
-    model, final_metrics = train_model(config, train_loader, val_loader)
-    total_time = time.time() - start_time
-
-    print(f"\n🎉 TRAINING COMPLETED!")
-    print(f"⏱️ Total time: {total_time/60:.1f} minutes")
-    print(f"🏆 Final Results:")
-    print(f"   Validation Loss: {final_metrics['val_loss']:.4f}")
-    print(f"   Validation Accuracy: {final_metrics['val_accuracy']:.4f}")
-    print(f"   Validation Perplexity: {final_metrics['val_perplexity']:.2f}")
+if __name__ == "__main__":
+    main()
