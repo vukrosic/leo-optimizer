@@ -840,8 +840,8 @@ def main():
 
     # Create config
     config = LRAblationConfig()
-    # Train for 400 steps and evaluate every 100 steps
-    config.max_steps = 400
+    # Train for 1200 steps and evaluate every 100 steps
+    config.max_steps = 1200
     config.eval_every = 100
     print(f"\n📋 Configuration:")
     print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H")
