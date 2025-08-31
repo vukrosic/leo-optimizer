@@ -572,15 +572,9 @@ def read_muon_default_lr(muon_file_path: str = "llm_muon.py") -> float:
     return 0.01
 
 def define_leo_lr_sweep_around(base_lr: float = 0.0005) -> list:
-    """Define Leo learning rates centered around a base LR (default 5e-4)."""
-    # Include lower-than-base and higher-than-base values
-    lr_list = sorted({
-        max(base_lr / 3, 1e-6),
-        max(base_lr / 2, 1e-6),
-        base_lr,
-        base_lr * 1.5,
-        base_lr * 2,
-    })
+    """Define Leo learning rates emphasizing 2x–10x lower than base."""
+    factors = [1/10, 1/5, 1/4, 1/3, 1/2, 1.0]
+    lr_list = sorted({max(base_lr * f, 1e-7) for f in factors})
     return lr_list
 
 def plot_lr_ablation_results(results: Dict, config: LRAblationConfig):
