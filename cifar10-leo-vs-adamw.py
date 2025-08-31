@@ -176,7 +176,7 @@ test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1000, shuffle
 classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 
-# ------------------- 训练函数 (增强日志) -------------------
+# ------------------- 训练函数 (保持不变) -------------------
 def train_model(optimizer_class, optimizer_name, lr=0.001, weight_decay=0.01, num_epochs=10, **kwargs):
     model = SimpleCNN().to(device)
     criterion = nn.CrossEntropyLoss()
@@ -185,41 +185,11 @@ def train_model(optimizer_class, optimizer_name, lr=0.001, weight_decay=0.01, nu
     
     train_losses = []
     
-    # Training setup info
-    total_batches = len(train_loader)
-    total_steps = num_epochs * total_batches
-    samples_per_batch = train_loader.batch_size
-    total_samples = len(train_dataset)
-    
-    print(f"\n{'='*60}")
-    print(f"Starting Training: {optimizer_name}")
-    print(f"{'='*60}")
-    print(f"Model: SimpleCNN | Dataset: CIFAR-10")
-    print(f"Device: {device}")
-    print(f"Epochs: {num_epochs} | Batch Size: {samples_per_batch}")
-    print(f"Total Batches per Epoch: {total_batches}")
-    print(f"Total Training Steps: {total_steps}")
-    print(f"Learning Rate: {lr} | Weight Decay: {weight_decay}")
-    if kwargs:
-        print(f"Optimizer Params: {kwargs}")
-    print(f"{'='*60}")
-    
-    # Global timing
-    global_start_time = time.time()
-    step_count = 0
-    
+    print(f"\n--- Starting Training for {optimizer_name} ---")
     for epoch in range(num_epochs):
         model.train()
-        epoch_start_time = time.time()
         running_loss = 0.0
-        epoch_samples = 0
-        
-        print(f"\nEpoch {epoch+1}/{num_epochs}")
-        print(f"{'-'*50}")
-        
         for i, (inputs, labels) in enumerate(train_loader):
-            batch_start_time = time.time()
-            
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -227,78 +197,25 @@ def train_model(optimizer_class, optimizer_name, lr=0.001, weight_decay=0.01, nu
             loss.backward()
             optimizer.step()
             
-            batch_time = time.time() - batch_start_time
             running_loss += loss.item()
-            step_count += 1
-            epoch_samples += inputs.size(0)
             
-            # Detailed logging every 5 batches for better tracking
-            if i % 5 == 4:
-                avg_loss = running_loss / 5
-                
-                # Speed calculations
-                elapsed_time = time.time() - global_start_time
-                steps_per_sec = step_count / elapsed_time
-                samples_per_sec = (epoch * total_samples + epoch_samples) / elapsed_time
-                
-                # ETA calculations
-                remaining_steps = total_steps - step_count
-                eta_seconds = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0
-                eta_time = datetime.now() + timedelta(seconds=eta_seconds)
-                
-                # Progress percentage
-                progress = (step_count / total_steps) * 100
-                
-                print(f"Step {step_count:4d}/{total_steps} [{progress:5.1f}%] | "
-                      f"Batch {i+1:3d}/{total_batches} | "
-                      f"Loss: {avg_loss:.4f} | "
-                      f"Speed: {steps_per_sec:.1f} steps/s, {samples_per_sec:.0f} samples/s | "
-                      f"ETA: {eta_time.strftime('%H:%M:%S')}")
-                
+            # Print more frequently for the larger CIFAR-10 dataset
+            if i % 200 == 199:
+                print(f'{optimizer_name} - Epoch {epoch+1}, Batch {i+1}, Loss: {running_loss/200:.4f}')
                 running_loss = 0.0
         
-        # Epoch evaluation
         model.eval()
         total_loss = 0.0
-        eval_start_time = time.time()
-        
         with torch.no_grad():
-            for inputs, labels in test_loader:  # Use test_loader for evaluation
+            for inputs, labels in train_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
                 total_loss += loss.item()
         
-        eval_time = time.time() - eval_start_time
-        epoch_time = time.time() - epoch_start_time
-        avg_loss = total_loss / len(test_loader)
+        avg_loss = total_loss / len(train_loader)
         train_losses.append(avg_loss)
-        
-        # Epoch summary
-        elapsed_total = time.time() - global_start_time
-        remaining_epochs = num_epochs - (epoch + 1)
-        avg_epoch_time = elapsed_total / (epoch + 1)
-        eta_total = remaining_epochs * avg_epoch_time
-        eta_finish = datetime.now() + timedelta(seconds=eta_total)
-        
-        print(f"\nEpoch {epoch+1} Complete:")
-        print(f"  Training Time: {epoch_time:.1f}s | Eval Time: {eval_time:.1f}s")
-        print(f"  Test Loss: {avg_loss:.4f}")
-        print(f"  Avg Epoch Time: {avg_epoch_time:.1f}s | ETA Finish: {eta_finish.strftime('%H:%M:%S')}")
-        print(f"  Total Elapsed: {elapsed_total/60:.1f}m")
-    
-    # Final summary
-    total_time = time.time() - global_start_time
-    final_steps_per_sec = total_steps / total_time
-    final_samples_per_sec = (num_epochs * total_samples) / total_time
-    
-    print(f"\n{'='*60}")
-    print(f"Training Complete: {optimizer_name}")
-    print(f"{'='*60}")
-    print(f"Total Time: {total_time/60:.1f} minutes ({total_time:.1f}s)")
-    print(f"Final Speed: {final_steps_per_sec:.1f} steps/s, {final_samples_per_sec:.0f} samples/s")
-    print(f"Final Test Loss: {train_losses[-1]:.4f}")
-    print(f"{'='*60}")
+        print(f'{optimizer_name} - Epoch {epoch+1} Finished, Average Training Loss: {avg_loss:.4f}')
     
     return train_losses
 
