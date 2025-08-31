@@ -318,19 +318,36 @@ leo_params = {
 leo_losses = train_model(Leo, "Leo",lr=lr, weight_decay=weight_decay, num_epochs=num_epochs, **leo_params)
 adamw_losses = train_model(optim.AdamW, "AdamW",lr=3e-4, weight_decay=weight_decay, num_epochs=num_epochs)
 
-# ------------------- 绘制Loss曲线图 (保持不变) -------------------
-plt.figure(figsize=(10, 6))
-plt.plot(range(1, num_epochs+1), leo_losses, label='Leo', marker='o')
-plt.plot(range(1, num_epochs+1), adamw_losses, label='AdamW', marker='s')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Comparison of Leo and AdamW Optimizers on CIFAR-10') # MODIFIED: Updated title
-plt.legend()
-plt.grid(True)
-plt.savefig('optimizer_comparison_leo_cifar10.png') # MODIFIED: Updated filename
-plt.show()
+# ------------------- 绘制Loss曲线图 -------------------
+print(f"\n{'='*60}")
+print("Generating Training Comparison Plot...")
+print(f"{'='*60}")
 
-# 打印最终结果
-print(f"\nFinal Average Training Loss:")
+plt.figure(figsize=(12, 7))
+plt.plot(range(1, num_epochs+1), leo_losses, label='Leo', marker='o', linewidth=2, markersize=6, color='#1f77b4')
+plt.plot(range(1, num_epochs+1), adamw_losses, label='AdamW', marker='s', linewidth=2, markersize=6, color='#ff7f0e')
+plt.xlabel('Epoch', fontsize=12)
+plt.ylabel('Test Loss', fontsize=12)
+plt.title('Comparison of Leo vs AdamW Optimizers on CIFAR-10\nTraining Loss Over Time', fontsize=14, fontweight='bold')
+plt.legend(fontsize=11)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+
+# Save the plot
+filename = 'optimizer_comparison_leo_cifar10.png'
+plt.savefig(filename, dpi=300, bbox_inches='tight')
+print(f"Plot saved as: {filename}")
+
+# Display the plot
+print("Displaying comparison plot... (Close the plot window to continue)")
+plt.show(block=True)
+
+# Print final results
+print(f"\n{'='*60}")
+print("EXPERIMENT COMPLETE")
+print(f"{'='*60}")
+print(f"\nFinal Test Loss Results:")
 print(f"Leo Final Loss: {leo_losses[-1]:.4f}")
 print(f"AdamW Final Loss: {adamw_losses[-1]:.4f}")
+print(f"Leo performed {'better' if leo_losses[-1] < adamw_losses[-1] else 'worse'} than AdamW")
+print(f"{'='*60}")
