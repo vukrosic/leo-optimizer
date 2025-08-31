@@ -841,14 +841,15 @@ def main():
 
     # Create config
     config = LRAblationConfig()
-    # Ensure evaluation every 100 steps as requested
-    config.eval_every = 100
-    config.max_steps = 1000
+    # Test run: cap to 100 steps and evaluate multiple times for plotting
+    config.max_steps = 100
+    config.eval_every = max(10, min(100, config.max_steps // 5))  # ~5 evals (e.g., 20 when max_steps=100)
     print(f"\n📋 Configuration:")
     print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H")
     print(f"   Training: {config.max_steps} steps, batch size {config.batch_size}")
     print(f"   Data: {config.max_tokens:,} tokens from {config.num_documents} documents")
     print(f"   AdamW LR (fixed): {config.adamw_lr}")
+    print(f"   Eval every: {config.eval_every} steps")
 
     # Load data
     texts, tokenizer, tokens = load_and_cache_data(config)
