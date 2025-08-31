@@ -167,7 +167,7 @@ transform = transforms.Compose([
 train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
 test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
 
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=2048, shuffle=True)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=2048*4, shuffle=True)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1000, shuffle=False)
 
 # NEW: Define class names for context (optional, but good practice)
