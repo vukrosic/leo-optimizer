@@ -161,6 +161,27 @@ We conducted a comprehensive learning rate sweep comparing Leo and Muon across 6
 
 ![Leo vs Muon Learning Rate Ablation](leo_vs_muon_lr_ablation_20250831_150326.png)
 
+#### Experiment Configuration
+```json
+{
+  "d_model": 384,
+  "n_layers": 6,
+  "n_heads": 8,
+  "max_steps": 1000,
+  "batch_size": 24,
+  "adamw_lr": 0.001,
+  "num_documents": 1000,
+  "max_tokens": 250000,
+  "total_params": 29496192,
+  "lr_grid": [0.001, 0.003, 0.01, 0.03, 0.1, 0.3]
+}
+```
+
+#### Run Summary
+- **Best Muon**: val loss 1.7676, acc 0.6438, ppl 5.8568 at LR=0.03
+- **Best Leo**: val loss 5.4604, acc 0.1795, ppl 235.1846 at LR=0.001
+- **Stability**: Muon stable 0.001–0.1; Leo diverges at LR ≥ 0.1
+
 ### 🎯 **Key Findings: Muon Dominates Across All Learning Rates**
 
 The learning rate ablation reveals a **clear performance hierarchy** that contradicts our initial single-point comparison:

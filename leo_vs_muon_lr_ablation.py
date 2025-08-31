@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import json
 from datetime import datetime
 import seaborn as sns
+import re
 
 # Fix tokenizer parallelism warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -556,20 +557,31 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
 
     return train_losses, val_losses, final_metrics
 
-def define_learning_rates():
-    """Define learning rate ranges to test for both optimizers"""
-    
-    # Learning rates to test (logarithmic scale)
-    learning_rates = [
-        0.001,   # 1e-3
-        0.003,   # 3e-3  
-        0.01,    # 1e-2
-        0.03,    # 3e-2
-        0.1,     # 1e-1
-        0.3,     # 3e-1
-    ]
-    
-    return learning_rates
+def read_muon_default_lr(muon_file_path: str = "llm_muon.py") -> float:
+    """Parse Muon's default LR from llm_muon.py ModelConfig.muon_lr."""
+    try:
+        with open(muon_file_path, 'r') as f:
+            content = f.read()
+        # Look for a line like: muon_lr: float = 0.01
+        match = re.search(r"muon_lr\s*:\s*float\s*=\s*([0-9]*\.?[0-9]+(?:e-?\d+)?)", content)
+        if match:
+            return float(match.group(1))
+    except Exception as e:
+        print(f"⚠️ Could not read muon default LR from {muon_file_path}: {e}")
+    # Fallback to a sensible default if parsing fails
+    return 0.01
+
+def define_leo_lr_sweep_around(base_lr: float = 0.001) -> list:
+    """Define Leo learning rates centered around a base LR (default 1e-3)."""
+    # Slightly asymmetric to cover a reasonable local neighborhood
+    lr_list = sorted({
+        max(base_lr / 2, 1e-5),
+        base_lr,
+        base_lr * 1.5,
+        base_lr * 2,
+        base_lr * 3,
+    })
+    return lr_list
 
 def plot_lr_ablation_results(results: Dict, config: LRAblationConfig):
     """Create comprehensive plots of learning rate ablation results"""
@@ -670,6 +682,38 @@ def plot_lr_ablation_results(results: Dict, config: LRAblationConfig):
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     print(f"📊 LR ablation results plot saved as {filename}")
     
+    plt.show()
+
+def plot_overlay_val_loss(results: Dict, config: LRAblationConfig):
+    """Plot all validation loss curves on the same axes (Muon baseline + Leo sweep)."""
+    plt.figure(figsize=(10, 6))
+
+    # Collect and plot Muon baseline (there should be exactly one)
+    muon_keys = [k for k in results.keys() if k.startswith('Muon_')]
+    for key in muon_keys:
+        val_curve = results[key]['val_losses']
+        steps = list(range(0, len(val_curve) * config.eval_every, config.eval_every))
+        plt.plot(steps, val_curve, label=f"Muon (LR={results[key]['metrics']['main_lr']})", linewidth=2)
+
+    # Plot Leo curves
+    for key in sorted([k for k in results.keys() if k.startswith('Leo_')],
+                      key=lambda x: float(x.split('_')[1])):
+        val_curve = results[key]['val_losses']
+        steps = list(range(0, len(val_curve) * config.eval_every, config.eval_every))
+        plt.plot(steps, val_curve, linestyle='--', marker='o', markersize=3,
+                 label=f"Leo (LR={results[key]['metrics']['main_lr']})", alpha=0.8)
+
+    plt.title('Validation Loss vs Training Steps (Eval every 100 steps)')
+    plt.xlabel('Training Step')
+    plt.ylabel('Validation Loss')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f'leo_lr_sweep_vs_muon_baseline_{timestamp}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    print(f"📈 Overlay plot saved as {filename}")
     plt.show()
 
 def save_lr_ablation_results(results: Dict, config: LRAblationConfig):
@@ -784,78 +828,79 @@ def print_lr_ablation_summary(results: Dict):
         print(f"   Leo is {speed_diff:.1f}% faster per step")
 
 def main():
-    """Main learning rate ablation study function"""
-    print("🧪 Leo vs Muon Learning Rate Ablation Study")
+    """Leo-only LR sweep around 0.001 with Muon baseline fixed from llm_muon.py."""
+    print("🧪 Leo LR Sweep around 0.001 vs Muon Baseline")
     print("=" * 60)
-    
+
     # Check system
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"🔍 Device: {device}")
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-    
+
     # Create config
     config = LRAblationConfig()
+    # Ensure evaluation every 100 steps as requested
+    config.eval_every = 100
+    config.max_steps = 1000
     print(f"\n📋 Configuration:")
     print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H")
     print(f"   Training: {config.max_steps} steps, batch size {config.batch_size}")
     print(f"   Data: {config.max_tokens:,} tokens from {config.num_documents} documents")
     print(f"   AdamW LR (fixed): {config.adamw_lr}")
-    
+
     # Load data
     texts, tokenizer, tokens = load_and_cache_data(config)
     dataset = TextTokenDataset(tokens, config.max_seq_len)
-    
+
     # Train/val split
     val_size = len(dataset) // 10
     train_size = len(dataset) - val_size
     train_dataset, val_dataset = torch.utils.data.random_split(
         dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42)
     )
-    
+
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=0)
-    
+
     print(f"📊 Dataset: {len(train_dataset)} train, {len(val_dataset)} val samples")
-    
-    # Define learning rates to test
-    learning_rates = define_learning_rates()
-    print(f"\n🧪 Testing learning rates: {learning_rates}")
-    print(f"   Total experiments: {len(learning_rates) * 2} (Leo + Muon)")
-    
+
+    # Read Muon's default LR from llm_muon.py
+    muon_lr = read_muon_default_lr()
+    leo_lrs = define_leo_lr_sweep_around(0.001)
+    print(f"\n🔵 Muon baseline LR (from llm_muon.py): {muon_lr}")
+    print(f"🔴 Leo LR sweep around 0.001: {leo_lrs}")
+
     # Run experiments
     results = {}
     total_start_time = time.time()
-    
-    experiment_count = 0
-    total_experiments = len(learning_rates) * 2
-    
-    for lr in learning_rates:
-        for optimizer_name in ['Muon', 'Leo']:
-            experiment_count += 1
-            experiment_key = f"{optimizer_name}_{lr}"
-            
-            print(f"\n{'='*60}")
-            print(f"Experiment {experiment_count}/{total_experiments}: {experiment_key}")
-            print(f"{'='*60}")
-            
-            train_losses, val_losses, metrics = train_with_lr(
-                optimizer_name, lr, config, train_loader, val_loader
-            )
-            
-            results[experiment_key] = {
-                'train_losses': train_losses,
-                'val_losses': val_losses,
-                'metrics': metrics
-            }
-    
+
+    experiment_plan = [("Muon", muon_lr)] + [("Leo", lr) for lr in leo_lrs]
+    total_experiments = len(experiment_plan)
+
+    for idx, (optimizer_name, lr) in enumerate(experiment_plan, start=1):
+        experiment_key = f"{optimizer_name}_{lr}"
+        print(f"\n{'='*60}")
+        print(f"Experiment {idx}/{total_experiments}: {experiment_key}")
+        print(f"{'='*60}")
+
+        train_losses, val_losses, metrics = train_with_lr(
+            optimizer_name, lr, config, train_loader, val_loader
+        )
+
+        results[experiment_key] = {
+            'train_losses': train_losses,
+            'val_losses': val_losses,
+            'metrics': metrics
+        }
+
     total_time = time.time() - total_start_time
     print(f"\n🎉 All experiments completed in {total_time/60:.1f} minutes!")
-    
+
     # Analyze and save results
     print_lr_ablation_summary(results)
-    plot_lr_ablation_results(results, config)
+    plot_overlay_val_loss(results, config)
     save_lr_ablation_results(results, config)
 
 if __name__ == "__main__":
