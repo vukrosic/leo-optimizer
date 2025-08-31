@@ -74,7 +74,7 @@ def main():
 
     # Config
     config = ab.LRAblationConfig()
-    config.max_steps = 5000
+    config.max_steps = 10000
     config.eval_every = 100
 
     # Data
@@ -99,13 +99,15 @@ def main():
     # Run Muon
     m_train, m_val, m_metrics = ab.train_with_lr(
         optimizer_name='Muon', main_lr=muon_lr, config=config,
-        train_loader=train_loader, val_loader=val_loader
+        train_loader=train_loader, val_loader=val_loader,
+        checkpoint_dir='checkpoints', save_step=5000, resume=False
     )
 
     # Run Leo
     l_train, l_val, l_metrics = ab.train_with_lr(
         optimizer_name='Leo', main_lr=leo_lr, config=config,
-        train_loader=train_loader, val_loader=val_loader
+        train_loader=train_loader, val_loader=val_loader,
+        checkpoint_dir='checkpoints', save_step=5000, resume=False
     )
 
     # Build axes

@@ -432,7 +432,10 @@ def setup_optimizer(model: nn.Module, optimizer_name: str, main_lr: float, confi
     return [main_optimizer, adamw_optimizer]
 
 def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
-                 train_loader: DataLoader, val_loader: DataLoader) -> Tuple[List[float], List[float], Dict]:
+                 train_loader: DataLoader, val_loader: DataLoader,
+                 checkpoint_dir: Optional[str] = None,
+                 save_step: Optional[int] = None,
+                 resume: bool = False) -> Tuple[List[float], List[float], Dict]:
     """Train model with specific optimizer and learning rate"""
     print(f"\n🧪 Training {optimizer_name} with LR={main_lr}")
     
@@ -464,6 +467,35 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
 
     scaler = GradScaler() if config.use_amp else None
 
+    # Checkpoint setup
+    ckpt_path = None
+    if checkpoint_dir and save_step is not None:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        ckpt_path = os.path.join(
+            checkpoint_dir,
+            f"{optimizer_name}_lr{main_lr}_step{save_step}.pt"
+        )
+
+    # Optionally resume from checkpoint
+    step = 0
+    start_time = time.time()
+    if resume and ckpt_path and os.path.exists(ckpt_path):
+        print(f"🔁 Resuming from checkpoint: {ckpt_path}")
+        checkpoint = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(checkpoint['model'])
+        # Restore optimizers and schedulers
+        for opt, state in zip(optimizers, checkpoint['optimizers']):
+            opt.load_state_dict(state)
+        for sch, state in zip(schedulers, checkpoint['schedulers']):
+            sch.load_state_dict(state)
+        # Restore scaler
+        if scaler is not None and 'scaler' in checkpoint and checkpoint['scaler'] is not None:
+            scaler.load_state_dict(checkpoint['scaler'])
+        step = checkpoint.get('step', 0)
+        # Adjust start_time so elapsed continues accumulating
+        if 'elapsed' in checkpoint:
+            start_time = time.time() - checkpoint['elapsed']
+
     # Training metrics
     train_losses = []
     val_losses = []
@@ -473,10 +505,11 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
 
     # Training loop
     model.train()
-    step = 0
-    start_time = time.time()
 
     pbar = tqdm(total=config.max_steps, desc=f"{optimizer_name} LR={main_lr}")
+    if step > 0:
+        pbar.n = step
+        pbar.refresh()
 
     while step < config.max_steps:
         for batch_idx, (x, y) in enumerate(train_loader):
@@ -536,6 +569,22 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
 
             step += 1
             pbar.update(1)
+
+            # Save checkpoint at specific step
+            if ckpt_path and save_step is not None and step == save_step:
+                torch.save({
+                    'model': model.state_dict(),
+                    'optimizers': [opt.state_dict() for opt in optimizers],
+                    'schedulers': [sch.state_dict() for sch in schedulers],
+                    'scaler': scaler.state_dict() if scaler is not None else None,
+                    'step': step,
+                    'elapsed': time.time() - start_time,
+                    'config': {
+                        'optimizer_name': optimizer_name,
+                        'main_lr': main_lr,
+                    }
+                }, ckpt_path)
+                print(f"💾 Saved checkpoint at step {step} -> {ckpt_path}")
 
     pbar.close()
 
