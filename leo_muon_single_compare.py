@@ -20,13 +20,16 @@ import matplotlib.pyplot as plt
 import leo_vs_muon_lr_ablation as ab
 
 
-def compute_time_axis(metrics: dict, num_points: int, eval_every: int, max_steps: int):
-    # Use measured total training_time to approximate wall-clock per step
+def fetch_time_axis(metrics: dict, fallback_points: int, eval_every: int, max_steps: int):
+    # Prefer real eval timestamps recorded by train_with_lr; otherwise approximate
+    wt = metrics.get('eval_wall_times')
+    if isinstance(wt, list) and len(wt) > 0:
+        return wt
     total_time = metrics.get('training_time', None)
     if total_time is None or max_steps == 0:
-        return [i * eval_every for i in range(num_points)]
-    time_per_step = total_time / max_steps
-    return [i * eval_every * time_per_step for i in range(num_points)]
+        return [i * eval_every for i in range(fallback_points)]
+    tps = total_time / max_steps
+    return [i * eval_every * tps for i in range(fallback_points)]
 
 
 def plot_overlays(step_axis_data, time_axis_data, out_prefix: str):
@@ -71,7 +74,7 @@ def main():
 
     # Config
     config = ab.LRAblationConfig()
-    config.max_steps = 800
+    config.max_steps = 5000
     config.eval_every = 100
 
     # Data
@@ -112,8 +115,8 @@ def main():
         f"Leo (LR={leo_lr})": (steps_idx, l_val),
     }
 
-    muon_times = compute_time_axis(m_metrics, len(m_val), config.eval_every, config.max_steps)
-    leo_times = compute_time_axis(l_metrics, len(l_val), config.eval_every, config.max_steps)
+    muon_times = fetch_time_axis(m_metrics, len(m_val), config.eval_every, config.max_steps)
+    leo_times = fetch_time_axis(l_metrics, len(l_val), config.eval_every, config.max_steps)
     time_axis = {
         f"Muon (LR={muon_lr})": (muon_times, m_val),
         f"Leo (LR={leo_lr})": (leo_times, l_val),

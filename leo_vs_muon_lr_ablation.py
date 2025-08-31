@@ -468,6 +468,8 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
     train_losses = []
     val_losses = []
     step_times = []
+    eval_wall_times = []  # seconds since start_time when each eval completes
+    eval_steps = []       # training step indices where eval occurred
 
     # Training loop
     model.train()
@@ -529,6 +531,8 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
             if step % config.eval_every == 0:
                 eval_metrics = evaluate_model(model, val_loader, config)
                 val_losses.append(eval_metrics['val_loss'])
+                eval_wall_times.append(time.time() - start_time)
+                eval_steps.append(step)
 
             step += 1
             pbar.update(1)
@@ -552,7 +556,9 @@ def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
         'total_params': total_params,
         'optimizer': optimizer_name,
         'main_lr': main_lr,
-        'adamw_lr': config.adamw_lr
+        'adamw_lr': config.adamw_lr,
+        'eval_wall_times': eval_wall_times,
+        'eval_steps': eval_steps
     }
 
     return train_losses, val_losses, final_metrics
