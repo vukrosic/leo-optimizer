@@ -571,10 +571,15 @@ def read_muon_default_lr(muon_file_path: str = "llm_muon.py") -> float:
     # Fallback to a sensible default if parsing fails
     return 0.01
 
-def define_leo_lr_sweep_around(base_lr: float = 0.0005) -> list:
-    """Define Leo learning rates emphasizing 2x–10x lower than base."""
-    factors = [1/10, 1/5, 1/4, 1/3, 1/2, 1.0]
-    lr_list = sorted({max(base_lr * f, 1e-7) for f in factors})
+def define_leo_lr_sweep_around(base_lr: float = 0.0001) -> list:
+    """Define Leo learning rates at or below 1e-4 (include 5e-05, 1e-05, etc.)."""
+    lr_list = sorted({
+        1e-4,    # 0.00010
+        5e-5,    # 0.00005 (explicitly kept)
+        2e-5,    # 0.00002
+        1e-5,    # 0.00001
+        5e-6,    # 0.000005
+    })
     return lr_list
 
 def plot_lr_ablation_results(results: Dict, config: LRAblationConfig):
@@ -835,8 +840,8 @@ def main():
 
     # Create config
     config = LRAblationConfig()
-    # Train for 300 steps and evaluate every 100 steps
-    config.max_steps = 300
+    # Train for 400 steps and evaluate every 100 steps
+    config.max_steps = 400
     config.eval_every = 100
     print(f"\n📋 Configuration:")
     print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H")
@@ -863,7 +868,7 @@ def main():
 
     # Read Muon's default LR from llm_muon.py
     muon_lr = read_muon_default_lr()
-    leo_lrs = define_leo_lr_sweep_around(0.0005)
+    leo_lrs = define_leo_lr_sweep_around(0.0001)
     print(f"\n🔵 Muon baseline LR (from llm_muon.py): {muon_lr}")
     print(f"🔴 Leo LR sweep around 0.001: {leo_lrs}")
 
