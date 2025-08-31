@@ -141,12 +141,6 @@ update = update * align_const / rms
 - **Memory efficient**: No intermediate matrices stored (unlike Newton-Schulz)
 - **Single pass**: Computes result in one forward pass through the data
 
-**🎯 Orthogonalization Approximation Quality:**
-- **Good for sparse updates**: When gradients have clear row/column structure
-- **Weaker for dense updates**: Less effective when all elements are significant
-- **Trade-off**: ~10x faster than Newton-Schulz but ~30% less orthogonal
-- **Best use case**: Large matrices where speed matters more than perfect orthogonality
-
 ### 🎯 **The Key Insight**
 
 **Leo_QROrthog represents the theoretical upper bound** - it shows what perfect orthogonalization can achieve. Both Muon and original Leo are trying to approximate this efficiently:
@@ -166,18 +160,11 @@ update = update * align_const / rms
 | **Momentum Style** | Nesterov | Lion-style | Lion-style |
 | **Best Use Case** | Balanced performance | Speed-critical | Research/benchmarking |
 
-## Performance Comparison
-
-We compared Leo and Muon optimizers on language modeling tasks using a 6-layer transformer (2.4M parameters):
-
-![Leo vs Muon Comparison](llm_optimizer_comparison_20250831_134852.png.png)
-
 ### Results Summary
 
 - **Training Loss**: Leo achieved slightly better convergence
 - **Validation Loss**: Leo: 4.2841 vs Muon: 4.2966 (-2.9% improvement)
 - **Validation Accuracy**: Leo: 0.2846 vs Muon: 0.2838 (+0.3% improvement)
-- **Training Speed**: Leo was ~5% faster per step due to more efficient operations
 
 ## Learning Rate Ablation Study
 
