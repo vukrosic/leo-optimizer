@@ -437,7 +437,7 @@ Based on the comprehensive ablation results:
 
 ### Standard Leo (Fast)
 ```python
-from leo_optimizer import Leo
+from llm_leo import Leo
 
 # Initialize standard Leo optimizer (element-wise orthogonalization)
 optimizer = Leo(
@@ -450,27 +450,8 @@ optimizer = Leo(
 )
 ```
 
-### Leo with QR Orthogonalization (Best Performance)
-```python
-from leo_optimizer import LeoAblation
-
-# Initialize Leo with QR decomposition (better performance, slower)
-optimizer = LeoAblation(
-    model.parameters(),
-    lr=0.01,
-    betas=(0.9, 0.99),
-    weight_decay=0.01,
-    align_const=0.3,
-    orthog_method='qr'  # Use QR decomposition
-)
-
-# Training loop
-for batch in dataloader:
-    optimizer.zero_grad()
-    loss = model(batch)
-    loss.backward()
-    optimizer.step()
-```
+### QR orthogonalization baseline
+The ablation write-up discusses a QR-based research baseline for orthogonalization. That exact variant is not packaged as a `LeoAblation` optimizer in this repo.
 
 ## Files
 
