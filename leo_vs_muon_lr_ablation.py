@@ -299,7 +299,9 @@ class MultiHeadAttention(nn.Module):
             Q, K, V, is_causal=True, dropout_p=self.dropout if self.training else 0.0
         )
         attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, self.d_model)
-        return self.w_o(attn_output)class FeedForward(nn.Module):
+        return self.w_o(attn_output)
+
+class FeedForward(nn.Module):
     def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
         self.linear1 = nn.Linear(d_model, d_ff, bias=False)
@@ -426,8 +428,9 @@ def setup_optimizer(model: nn.Module, optimizer_name: str, main_lr: float, confi
     adamw_optimizer = torch.optim.AdamW(adamw_params, lr=config.adamw_lr, weight_decay=config.weight_decay)
     print(f"  AdamW LR fixed at: {config.adamw_lr}")
 
-    return [main_optimizer, adamw_optimizer]def train_w
-ith_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig, 
+    return [main_optimizer, adamw_optimizer]
+
+def train_with_lr(optimizer_name: str, main_lr: float, config: LRAblationConfig,
                  train_loader: DataLoader, val_loader: DataLoader) -> Tuple[List[float], List[float], Dict]:
     """Train model with specific optimizer and learning rate"""
     print(f"\n🧪 Training {optimizer_name} with LR={main_lr}")
@@ -566,8 +569,9 @@ def define_learning_rates():
         0.3,     # 3e-1
     ]
     
-    return learning_ratesdef p
-lot_lr_ablation_results(results: Dict, config: LRAblationConfig):
+    return learning_rates
+
+def plot_lr_ablation_results(results: Dict, config: LRAblationConfig):
     """Create comprehensive plots of learning rate ablation results"""
     
     # Separate results by optimizer
@@ -777,8 +781,9 @@ def print_lr_ablation_summary(results: Dict):
         print(f"   Muon is {speed_diff:.1f}% faster per step")
     else:
         speed_diff = ((muon_speed - leo_speed) / leo_speed) * 100
-        print(f"   Leo is {speed_diff:.1f}% faster per step")def main(
-):
+        print(f"   Leo is {speed_diff:.1f}% faster per step")
+
+def main():
     """Main learning rate ablation study function"""
     print("🧪 Leo vs Muon Learning Rate Ablation Study")
     print("=" * 60)

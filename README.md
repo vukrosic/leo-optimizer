@@ -12,15 +12,76 @@ Leo optimizer uses a hybrid approach that combines:
 2. **Element-wise orthogonalization**: For 2D parameters (like linear layer weights), applies row and column normalization followed by RMS scaling
 3. **Adaptive scaling**: Uses an alignment constant to control the magnitude of updates
 
+## Understanding Orthogonalization Methods
+
+The key innovation in both Leo and Muon is **orthogonalization** - making gradient updates more orthogonal to improve optimization. However, they use different approximation strategies:
+
+### 🏆 **The Orthogonalization Hierarchy**
+
+| Method | Computational Cost | Quality | Performance | Used By |
+|--------|-------------------|---------|-------------|---------|
+| **SVD/QR Decomposition** | Highest O(n³) | Perfect | Best | Leo_QROrthog |
+| **Newton-Schulz Iteration** | Medium O(n²)×5 | Very Good | Good | Muon |
+| **Element-wise Normalization** | Lowest O(n) | Approximate | Moderate | Leo |
+
+### 🔬 **Method Details**
+
+#### **1. True Orthogonalization (SVD/QR) - The Gold Standard**
+```python
+# Perfect but expensive orthogonalization
+U, S, V = torch.svd(update_direction)
+update_direction = U @ V.t() * align_const
+```
+- **What it does**: Mathematically perfect orthogonalization
+- **Cost**: O(n³) - very expensive for large matrices
+- **Result**: Best possible optimization dynamics
+
+#### **2. Newton-Schulz Iteration (Muon's Approach)**
+```python
+# Iterative approximation to matrix orthogonalization
+def zeropower_via_newtonschulz5(G, steps=5):
+    X = G / G.norm()
+    for _ in range(steps):
+        A = X @ X.mT
+        B = b * A + c * A @ A  
+        X = a * X + B @ X
+    return X
+```
+- **What it does**: Iteratively approximates true orthogonalization
+- **Cost**: O(n²) per iteration × 5 iterations
+- **Result**: Good approximation with reasonable computational cost
+
+#### **3. Element-wise Normalization (Leo's Fast Method)**
+```python
+# Fast row/column normalization approximation
+row_norm = torch.linalg.norm(update_direction, dim=1, keepdim=True)
+col_norm = torch.linalg.norm(update_direction, dim=0, keepdim=True)
+update = update_direction / row_norm + update_direction / col_norm
+rms = torch.sqrt(torch.mean(update.square()))
+update = update * align_const / rms
+```
+- **What it does**: Approximates orthogonalization via row/column normalization
+- **Cost**: O(n) - very fast element-wise operations
+- **Result**: Rough approximation, prioritizes speed over accuracy
+
+### 🎯 **The Key Insight**
+
+**Leo_QROrthog represents the theoretical upper bound** - it shows what perfect orthogonalization can achieve. Both Muon and original Leo are trying to approximate this efficiently:
+
+- **Leo_QROrthog**: Perfect but slow (research baseline)
+- **Muon**: Good approximation, moderate speed (practical choice)
+- **Leo**: Fast approximation, lower accuracy (speed-critical applications)
+
 ### Key Differences from Muon
 
-| Feature | Muon | Leo |
-|---------|------|-----|
-| **Orthogonalization** | Newton-Schulz iteration (5 steps) | Element-wise row/column normalization |
-| **Computational Cost** | Higher (matrix operations) | Lower (element-wise operations) |
-| **Memory Usage** | More intensive | More efficient |
-| **Momentum Style** | Nesterov momentum | Lion-style dual momentum |
-| **Parameter Handling** | Uniform approach | Dimension-aware (2D vs 1D) |
+| Feature | Muon | Leo | Leo_QROrthog |
+|---------|------|-----|--------------|
+| **Orthogonalization** | Newton-Schulz iteration | Element-wise normalization | SVD decomposition |
+| **Computational Cost** | Medium O(n²)×5 | Low O(n) | High O(n³) |
+| **Orthogonalization Quality** | Very Good | Approximate | Perfect |
+| **Memory Usage** | Moderate | Low | High |
+| **Momentum Style** | Nesterov | Lion-style | Lion-style |
+| **Best Use Case** | Balanced performance | Speed-critical | Research/benchmarking |
 
 ## Performance Comparison
 
@@ -53,19 +114,24 @@ The most significant finding is that **QR decomposition-based orthogonalization 
 
 #### How QR Orthogonalization Works
 
-Instead of element-wise row/column normalization, Leo_QROrthog uses:
+Leo_QROrthog uses **true orthogonalization** - the gold standard that both Muon and Leo approximate:
 
 ```python
-# QR decomposition orthogonalization
+# Perfect orthogonalization via SVD decomposition
 U, S, V = torch.svd(update_direction)
 update_direction = U @ V.t() * align_const
 ```
 
-This approach:
-1. **Performs true orthogonalization** via SVD decomposition
-2. **Preserves gradient information** better than element-wise normalization
-3. **Maintains numerical stability** through proper matrix decomposition
-4. **Costs more computationally** but provides better optimization dynamics
+**Why it's the best**:
+1. **Mathematically perfect orthogonalization** - no approximation errors
+2. **Preserves all gradient information** while ensuring orthogonality
+3. **Provides optimal optimization dynamics** - theoretical upper bound
+4. **Expensive but worth it** - shows what's possible with unlimited compute
+
+**The relationship**:
+- **Leo_QROrthog** = The expensive "ground truth" (what we want)
+- **Muon** = Smart approximation to QR (good balance of speed/quality)  
+- **Leo** = Fast approximation to QR (prioritizes speed over accuracy)
 
 #### 📊 **Learning Rate Sensitivity**
 
