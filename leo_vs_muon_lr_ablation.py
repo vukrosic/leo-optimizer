@@ -192,8 +192,7 @@ class Leo(torch.optim.Optimizer):
                 # Final parameter update
                 p.add_(update_direction, alpha=-lr)
 
-        return loss# Imp
-ort model components (same as before)
+        return loss# Import model components (same as before)
 def load_and_cache_data(config: LRAblationConfig, cache_dir: str = "lr_ablation_cache"):
     """Load and cache tokenized data"""
     os.makedirs(cache_dir, exist_ok=True)
@@ -300,8 +299,7 @@ class MultiHeadAttention(nn.Module):
             Q, K, V, is_causal=True, dropout_p=self.dropout if self.training else 0.0
         )
         attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, self.d_model)
-        return self.w_o(attn_output)clas
-s FeedForward(nn.Module):
+        return self.w_o(attn_output)class FeedForward(nn.Module):
     def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
         self.linear1 = nn.Linear(d_model, d_ff, bias=False)
