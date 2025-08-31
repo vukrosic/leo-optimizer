@@ -131,6 +131,8 @@ update = update * align_const / rms
 # Final update maintains desired magnitude while being "more orthogonal"
 ```
 
+"Oh, by the way, since the Leo optimizer involves optimization at the matrix level, some adjustments are needed. For instance, in multi-head attention, the qkv (w_q, w_k, w_v) of each head must be treated as distinct matrix parameters. However, the common practice is to compute the qkv weight matrices (w_q, w_k, w_v) of multi-head attention together in parallel. Without specific adjustments for multi-head attention (such as modifying the optimizer code to treat the weight matrices of multi-head attention as multiple independent weight matrices during optimization), the behavior may deviate from the design philosophy."
+
 **🧠 Intuition Behind the Method:**
 
 1. **Row normalization** (`/row_norm`): Makes each row have unit norm, preventing any single row from dominating
