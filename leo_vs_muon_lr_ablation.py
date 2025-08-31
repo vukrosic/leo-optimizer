@@ -571,15 +571,15 @@ def read_muon_default_lr(muon_file_path: str = "llm_muon.py") -> float:
     # Fallback to a sensible default if parsing fails
     return 0.01
 
-def define_leo_lr_sweep_around(base_lr: float = 0.001) -> list:
-    """Define Leo learning rates centered around a base LR (default 1e-3)."""
-    # Slightly asymmetric to cover a reasonable local neighborhood
+def define_leo_lr_sweep_around(base_lr: float = 0.0005) -> list:
+    """Define Leo learning rates centered around a base LR (default 5e-4)."""
+    # Include lower-than-base and higher-than-base values
     lr_list = sorted({
-        max(base_lr / 2, 1e-5),
+        max(base_lr / 3, 1e-6),
+        max(base_lr / 2, 1e-6),
         base_lr,
         base_lr * 1.5,
         base_lr * 2,
-        base_lr * 3,
     })
     return lr_list
 
@@ -841,9 +841,9 @@ def main():
 
     # Create config
     config = LRAblationConfig()
-    # Test run: cap to 100 steps and evaluate multiple times for plotting
-    config.max_steps = 100
-    config.eval_every = max(10, min(100, config.max_steps // 5))  # ~5 evals (e.g., 20 when max_steps=100)
+    # Train for 300 steps and evaluate every 100 steps
+    config.max_steps = 300
+    config.eval_every = 100
     print(f"\n📋 Configuration:")
     print(f"   Architecture: {config.d_model}d, {config.n_layers}L, {config.n_heads}H")
     print(f"   Training: {config.max_steps} steps, batch size {config.batch_size}")
@@ -869,7 +869,7 @@ def main():
 
     # Read Muon's default LR from llm_muon.py
     muon_lr = read_muon_default_lr()
-    leo_lrs = define_leo_lr_sweep_around(0.001)
+    leo_lrs = define_leo_lr_sweep_around(0.0005)
     print(f"\n🔵 Muon baseline LR (from llm_muon.py): {muon_lr}")
     print(f"🔴 Leo LR sweep around 0.001: {leo_lrs}")
 
