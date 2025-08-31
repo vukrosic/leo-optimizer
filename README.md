@@ -1,4 +1,28 @@
 # Leo Optimizer
+ 
+## Quick start (main script)
+Run the single-run comparison:
+```bash
+python leo_muon_single_compare.py
+```
+
+On smaller GPUs, reduce the number of training steps:
+- Open `leo_muon_single_compare.py`
+- Find `config.max_steps = 10000` in the config section
+- Lower it (e.g., `1000` or `500`) to fit your GPU
+
+```python
+# In leo_muon_single_compare.py
+config = ab.LRAblationConfig()
+config.max_steps = 10000  # try 1000 or 500 on smaller GPUs
+config.eval_every = 100
+```
+
+Muon currently converges faster on validation loss, but Leo is a step toward a faster, linear optimizer. This repo explores that direction.
+
+![Muon vs Leo — Validation Loss](muon_vs_leo_val_loss.png)
+
+# Leo Optimizer
 
 Leo (Lion with Element-wise Orthogonalization-proxy) is a fast and efficient optimizer that combines Lion-style momentum updates with element-wise orthogonalization techniques. It's designed as a faster alternative to Muon.
 
