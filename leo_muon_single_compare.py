@@ -71,7 +71,7 @@ def main():
 
     # Config
     config = ab.LRAblationConfig()
-    config.max_steps = 300
+    config.max_steps = 800
     config.eval_every = 100
 
     # Data
