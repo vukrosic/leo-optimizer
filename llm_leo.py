@@ -267,19 +267,18 @@ class MultiHeadAttention(nn.Module):
         self.dropout = dropout
 
     def forward(self, x):
-        batch_size, seq_len = x.size(0), x.size(1)
+        B, T = x.size(0), x.size(1)
+        qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.d_k).permute(2, 0, 3, 1, 4)
+        Q, K, V = qkv[0], qkv[1], qkv[2]  # [B, H, T, D]
 
-        qkv = self.qkv(x).reshape(batch_size, seq_len, 3, self.n_heads, self.d_k)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        Q, K, V = qkv[0], qkv[1], qkv[2]
-
-        Q = self.rotary(Q)
-        K = self.rotary(K)
+        # Apply RoPE on [B, T, H, D]
+        Q = self.rotary(Q.transpose(1, 2)).transpose(1, 2)
+        K = self.rotary(K.transpose(1, 2)).transpose(1, 2)
 
         attn_output = F.scaled_dot_product_attention(
             Q, K, V, is_causal=True, dropout_p=self.dropout if self.training else 0.0
         )
-        attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, self.d_model)
+        attn_output = attn_output.transpose(1, 2).reshape(B, T, self.d_model)
         return self.w_o(attn_output)
 
 class FeedForward(nn.Module):
