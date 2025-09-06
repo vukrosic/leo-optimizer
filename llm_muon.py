@@ -219,8 +219,8 @@ class MultiHeadAttention(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         Q, K, V = qkv[0], qkv[1], qkv[2]
 
-        Q = self.rotary(Q)
-        K = self.rotary(K)
+        Q = self.rotary(Q.transpose(1, 2)).transpose(1, 2)
+        K = self.rotary(K.transpose(1, 2)).transpose(1, 2)
 
         attn_output = F.scaled_dot_product_attention(
             Q, K, V, is_causal=True, dropout_p=self.dropout if self.training else 0.0
